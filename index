@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <!-- GitHub Pages用にbaseタグを変更 -->
+  <base target="_self">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+  
+  <!-- PDFライブラリ -->
+  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <script src="https://unpkg.com/@pdf-lib/fontkit/dist/fontkit.umd.js"></script>
+  <script src="https://unpkg.com/pdfjs-dist@2.16.105/build/pdf.min.js"></script>
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@2.16.105/build/pdf.worker.min.js';
+  </script>
+  
+  <style>
+    body { background-color: #f0f2f5; padding-bottom: 50px; user-select: none; font-family: sans-serif; }
+    
+    .toolbar {
+      position: sticky; top: 0; z-index: 1000;
+      background: white; padding: 8px 15px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      display: flex; gap: 8px; align-items: center;
+      flex-wrap: wrap;
+    }
+    
+    #pdf-container {
+      display: flex; flex-direction: column; align-items: center;
+      margin-top: 20px; gap: 20px;
+    }
+    
+    .page-wrapper {
+      position: relative;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+      border: 1px solid #ddd;
+      background: white;
+      transition: width 0.2s, height 0.2s;
+    }
+    
+    .edit-element { 
+      position: absolute; 
+      box-sizing: border-box; 
+      cursor: move; 
+    }
+    
+    .text-input {
+      background: rgba(255, 255, 255, 0.5); 
+      border: 1px dashed #007bff;
+      color: black; padding: 2px;
+      min-width: 50px; outline: none; z-index: 10;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+    .text-input:focus { 
+      border: 2px solid #007bff; 
+      background: rgba(255,255,255,0.9); 
+      cursor: text; 
+    }
+
+    .white-out {
+      background-color: white; border: 2px dashed red; opacity: 0.8; z-index: 5;
+    }
+    .white-out:hover { background-color: #ffecec; }
+
+    .btn-tool.active { background-color: #e7f1ff; border-color: #007bff; color: #007bff; }
+    .vr-custom { width: 1px; height: 20px; background: #ddd; margin: 0 5px; }
+
+    #loading-overlay {
+      position: fixed; top:0; left:0; width:100%; height:100%;
+      background: rgba(255,255,255,0.9); display: none;
+      justify-content: center; align-items: center; z-index: 9999;
+      flex-direction: column; text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ツールバー -->
+  <div class="toolbar">
+    <div class="fw-bold me-2"><i class="bi bi-pencil-square"></i></div>
+    
+    <input type="file" id="file-input" accept="application/pdf" style="display:none">
+    <button class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('file-input').click()" title="ファイルを開く">
+      <i class="bi bi-folder2-open"></i>
+    </button>
+    <span id="file-name" class="small text-muted ms-1" style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
+
+    <div class="vr-custom"></div>
+
+    <div class="input-group input-group-sm" style="width: auto;">
+      <button class="btn btn-outline-secondary" onclick="changeZoom(-0.2)"><i class="bi bi-dash"></i></button>
+      <span class="input-group-text bg-white" id="zoom-level" style="min-width: 60px; justify-content: center;">100%</span>
+      <button class="btn btn-outline-secondary" onclick="changeZoom(0.2)"><i class="bi bi-plus"></i></button>
+    </div>
+
+    <button class="btn btn-outline-secondary btn-sm ms-2" onclick="rotatePage()" title="90度回転">
+      <i class="bi bi-arrow-clockwise"></i> 回転
+    </button>
+
+    <div class="vr-custom"></div>
+
+    <button class="btn btn-outline-primary btn-sm btn-tool" id="btn-text" onclick="setTool('text')">
+      <i class="bi bi-type"></i> 入力
+    </button>
+    
+    <select class="form-select form-select-sm" id="font-size-select" style="width: auto;" onchange="updateFontSize()" title="文字サイズ">
+      <option value="8">8px</option>
+      <option value="10">10px</option>
+      <option value="12">12px</option>
+      <option value="14">14px</option>
+      <option value="16">16px</option>
+      <option value="18" selected>18px</option>
+      <option value="20">20px</option>
+      <option value="24">24px</option>
+      <option value="36">36px</option>
+      <option value="48">48px</option>
+      <option value="72">72px</option>
+    </select>
+
+    <button class="btn btn-outline-danger btn-sm btn-tool" id="btn-erase" onclick="setTool('erase')">
+      <i class="bi bi-eraser-fill"></i> 削除
+    </button>
+
+    <div class="vr-custom"></div>
+
+    <button class="btn btn-primary btn-sm ms-auto" onclick="startDownloadProcess()">
+      保存 <i class="bi bi-download"></i>
+    </button>
+  </div>
+
+  <div id="pdf-container">
+    <div class="text-center text-muted mt-5">
+      <p>PDFを選択してください</p>
+    </div>
+  </div>
+
+  <div id="loading-overlay">
+    <div class="spinner-border text-primary mb-2" role="status"></div>
+    <div class="fw-bold text-primary" id="loading-text">処理中...</div>
+    <div class="small text-muted mt-2" id="loading-subtext"></div>
+  </div>
+
+  <script>
+    const { PDFDocument, rgb } = PDFLib;
+
+    let originalFile = null;    
+    let originalPdfBytes = null; 
+    let currentTool = null;     
+    let pdfDoc = null;          
+    let currentScale = 1.0; 
+    let currentFocusInput = null;
+    let currentRotation = 0; 
+
+    function setTool(tool) {
+      currentTool = (currentTool === tool) ? null : tool;
+      document.querySelectorAll('.btn-tool').forEach(btn => btn.classList.remove('active'));
+      if (currentTool) {
+        document.getElementById(currentTool === 'text' ? 'btn-text' : 'btn-erase').classList.add('active');
+      }
+    }
+
+    function showLoading(show, text = "処理中...", subtext = "") {
+      document.getElementById('loading-text').innerText = text;
+      document.getElementById('loading-subtext').innerText = subtext;
+      document.getElementById('loading-overlay').style.display = show ? 'flex' : 'none';
+    }
+
+    async function changeZoom(delta) {
+      if (!originalPdfBytes) return;
+      const newScale = Math.round((currentScale + delta) * 10) / 10;
+      if (newScale < 0.4 || newScale > 3.0) return; 
+      showLoading(true, "表示倍率を変更中...");
+      const savedEdits = saveCurrentEdits();
+      currentScale = newScale;
+      document.getElementById('zoom-level').innerText = Math.round(currentScale * 100) + '%';
+      await renderPdf(originalPdfBytes);
+      restoreEdits(savedEdits);
+      showLoading(false);
+    }
+
+    async function rotatePage() {
+      if (!originalPdfBytes) return;
+      showLoading(true, "回転処理中...");
+      const savedEdits = saveCurrentEdits();
+      currentRotation = (currentRotation + 90) % 360;
+      await renderPdf(originalPdfBytes);
+      restoreEdits(savedEdits);
+      showLoading(false);
+    }
+
+    function updateFontSize() {
+      const sizeBase = parseInt(document.getElementById('font-size-select').value);
+      if (currentFocusInput) {
+        currentFocusInput.dataset.baseSize = sizeBase;
+        currentFocusInput.style.fontSize = (sizeBase * currentScale) + 'px';
+      }
+    }
+
+    document.getElementById('file-input').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      originalFile = file;
+      document.getElementById('file-name').textContent = file.name;
+      currentScale = 1.0;
+      currentRotation = 0;
+      document.getElementById('zoom-level').innerText = '100%';
+      showLoading(true, "PDFを読み込んでいます...");
+      const reader = new FileReader();
+      reader.onload = async function() {
+        originalPdfBytes = new Uint8Array(reader.result);
+        await renderPdf(originalPdfBytes);
+        showLoading(false);
+      };
+      reader.readAsArrayBuffer(file);
+    });
+
+    async function renderPdf(data) {
+      const container = document.getElementById('pdf-container');
+      container.innerHTML = ''; 
+      const loadingTask = pdfjsLib.getDocument({
+        data: data,
+        cMapUrl: 'https://unpkg.com/pdfjs-dist@2.16.105/cmaps/',
+        cMapPacked: true
+      });
+      try {
+        pdfDoc = await loadingTask.promise;
+      } catch(e) {
+        alert("PDF読み込みエラー: " + e.message);
+        return;
+      }
+      for (let i = 1; i <= pdfDoc.numPages; i++) {
+        const page = await pdfDoc.getPage(i);
+        const viewport = page.getViewport({ scale: currentScale, rotation: currentRotation });
+        const wrapper = document.createElement('div');
+        wrapper.className = 'page-wrapper';
+        wrapper.style.width = `${viewport.width}px`;
+        wrapper.style.height = `${viewport.height}px`;
+        wrapper.dataset.pageNumber = i;
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const context = canvas.getContext('2d');
+        await page.render({ canvasContext: context, viewport: viewport }).promise;
+        wrapper.appendChild(canvas);
+        container.appendChild(wrapper);
+        setupInteraction(wrapper);
+      }
+    }
+
+    function saveCurrentEdits() {
+      const edits = [];
+      document.querySelectorAll('.page-wrapper').forEach(wrapper => {
+        const pageNum = parseInt(wrapper.dataset.pageNumber);
+        const rect = wrapper.getBoundingClientRect(); 
+        wrapper.querySelectorAll('.text-input').forEach(el => {
+          edits.push({
+            type: 'text',
+            page: pageNum,
+            xRatio: parseFloat(el.style.left) / rect.width,
+            yRatio: parseFloat(el.style.top) / rect.height,
+            text: el.innerText,
+            baseSize: el.dataset.baseSize || 18
+          });
+        });
+        wrapper.querySelectorAll('.white-out').forEach(el => {
+          edits.push({
+            type: 'erase',
+            page: pageNum,
+            xRatio: parseFloat(el.style.left) / rect.width,
+            yRatio: parseFloat(el.style.top) / rect.height,
+            wRatio: parseFloat(el.style.width) / rect.width,
+            hRatio: parseFloat(el.style.height) / rect.height
+          });
+        });
+      });
+      return edits;
+    }
+
+    function restoreEdits(edits) {
+      const wrappers = document.querySelectorAll('.page-wrapper');
+      edits.forEach(edit => {
+        const wrapper = wrappers[edit.page - 1]; 
+        if(!wrapper) return;
+        const w = parseFloat(wrapper.style.width);
+        const h = parseFloat(wrapper.style.height);
+        if (edit.type === 'text') {
+          const el = createTextInputElement(w * edit.xRatio, h * edit.yRatio, edit.baseSize);
+          el.innerText = edit.text;
+          wrapper.appendChild(el);
+        } else if (edit.type === 'erase') {
+          const el = document.createElement('div');
+          el.className = 'edit-element white-out';
+          el.style.left = (w * edit.xRatio) + 'px';
+          el.style.top = (h * edit.yRatio) + 'px';
+          el.style.width = (w * edit.wRatio) + 'px';
+          el.style.height = (h * edit.hRatio) + 'px';
+          makeDraggable(el);
+          addDeleteEvent(el, 'この白塗りエリアを取り消しますか？');
+          wrapper.appendChild(el);
+        }
+      });
+    }
+
+    function setupInteraction(wrapper) {
+      let isDrawing = false;
+      let startX, startY;
+      let tempRect = null;
+      wrapper.addEventListener('click', (e) => {
+        if (currentTool !== 'text') return;
+        if (e.target.closest('.edit-element')) return; 
+        const rect = wrapper.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const baseSize = document.getElementById('font-size-select').value;
+        const el = createTextInputElement(x, y, baseSize);
+        wrapper.appendChild(el);
+        setTimeout(() => el.focus(), 0);
+      });
+      wrapper.addEventListener('mousedown', (e) => {
+        if (currentTool !== 'erase') return;
+        if (e.target.classList.contains('white-out')) return; 
+        isDrawing = true;
+        const rect = wrapper.getBoundingClientRect();
+        startX = e.clientX - rect.left;
+        startY = e.clientY - rect.top;
+        tempRect = document.createElement('div');
+        tempRect.className = 'edit-element white-out';
+        tempRect.style.left = startX + 'px';
+        tempRect.style.top = startY + 'px';
+        tempRect.style.width = '0px';
+        tempRect.style.height = '0px';
+        wrapper.appendChild(tempRect);
+      });
+      wrapper.addEventListener('mousemove', (e) => {
+        if (!isDrawing || !tempRect) return;
+        const rect = wrapper.getBoundingClientRect();
+        const currentX = e.clientX - rect.left;
+        const currentY = e.clientY - rect.top;
+        const w = currentX - startX;
+        const h = currentY - startY;
+        tempRect.style.width = Math.abs(w) + 'px';
+        tempRect.style.height = Math.abs(h) + 'px';
+        tempRect.style.left = (w < 0 ? currentX : startX) + 'px';
+        tempRect.style.top = (h < 0 ? currentY : startY) + 'px';
+      });
+      wrapper.addEventListener('mouseup', () => {
+        if (isDrawing) {
+          isDrawing = false;
+          if (parseInt(tempRect.style.width) < 5 || parseInt(tempRect.style.height) < 5) {
+            tempRect.remove();
+          } else {
+            makeDraggable(tempRect);
+            addDeleteEvent(tempRect, 'この白塗りエリアを取り消しますか？');
+          }
+          tempRect = null;
+        }
+      });
+    }
+
+    function makeDraggable(element) {
+      let isDragging = false;
+      let startX, startY, initialLeft, initialTop;
+      element.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        initialLeft = parseFloat(element.style.left);
+        initialTop = parseFloat(element.style.top);
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+      });
+      function onMouseMove(e) {
+        if (!isDragging) return;
+        e.preventDefault(); 
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        element.style.left = (initialLeft + dx) + 'px';
+        element.style.top = (initialTop + dy) + 'px';
+      }
+      function onMouseUp(e) {
+        if (!isDragging) return;
+        isDragging = false;
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+      }
+    }
+
+    function createTextInputElement(x, y, baseSize) {
+      const input = document.createElement('div');
+      input.contentEditable = true;
+      input.className = 'edit-element text-input';
+      input.style.left = x + 'px';
+      input.style.top = y + 'px';
+      input.dataset.baseSize = baseSize;
+      input.style.fontSize = (parseInt(baseSize) * currentScale) + 'px';
+      input.innerText = '';
+      input.title = "ドラッグで移動 / ダブルクリックで削除";
+      input.addEventListener('blur', () => {
+        if (input.innerText.trim() === '') input.remove();
+      });
+      input.addEventListener('focus', () => {
+        currentFocusInput = input;
+        document.getElementById('font-size-select').value = input.dataset.baseSize;
+      });
+      makeDraggable(input); 
+      addDeleteEvent(input, 'このテキストを削除しますか？');
+      return input;
+    }
+
+    function addDeleteEvent(element, msg) {
+      element.addEventListener('dblclick', (e) => {
+        e.stopPropagation(); 
+        if (confirm(msg)) {
+          element.remove();
+          if(element === currentFocusInput) currentFocusInput = null;
+        }
+      });
+    }
+
+    // ==========================================
+    // Web用修正：保存処理
+    // ==========================================
+    
+    // GASのgoogle.script.runの代わりに、同じフォルダのfont.ttfを取得する
+    async function startDownloadProcess() {
+      if (!originalPdfBytes) return alert("ファイルが開かれていません");
+      showLoading(true, "日本語フォントを準備中...", "font.ttfを読み込んでいます...");
+
+      try {
+        // 同じ階層にある 'font.ttf' を取得
+        const response = await fetch('font.ttf');
+        if (!response.ok) {
+          throw new Error(`フォントファイル(font.ttf)が見つかりません。ステータス: ${response.status}`);
+        }
+        const fontBuffer = await response.arrayBuffer();
+        
+        // フォントデータを渡してPDF生成へ
+        await executePdfGeneration(fontBuffer);
+        
+      } catch (e) {
+        showLoading(false);
+        alert("フォント読み込みエラー: " + e.message + "\nGitHubリポジトリに 'font.ttf' があるか確認してください。");
+      }
+    }
+
+    async function executePdfGeneration(fontBuffer) {
+      showLoading(true, "PDFを再構築中...", "安全のため全ページを画像化して結合しています...");
+
+      try {
+        const newPdfDoc = await PDFDocument.create();
+        
+        newPdfDoc.registerFontkit(fontkit);
+        // Web版ではArrayBufferを直接受け取るのでUint8Arrayにするだけ
+        const fontBytes = new Uint8Array(fontBuffer);
+        const customFont = await newPdfDoc.embedFont(fontBytes);
+
+        const loadingTask = pdfjsLib.getDocument({
+          data: originalPdfBytes,
+          cMapUrl: 'https://unpkg.com/pdfjs-dist@2.16.105/cmaps/',
+          cMapPacked: true
+        });
+        const srcPdf = await loadingTask.promise;
+
+        for (let i = 1; i <= srcPdf.numPages; i++) {
+          const page = await srcPdf.getPage(i);
+          
+          const scale = 2.0; 
+          const viewport = page.getViewport({ scale: scale, rotation: currentRotation });
+          
+          const canvas = document.createElement('canvas');
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          const context = canvas.getContext('2d');
+          
+          await page.render({ canvasContext: context, viewport: viewport }).promise;
+          
+          const imgData = canvas.toDataURL('image/jpeg', 0.8);
+          const jpgImage = await newPdfDoc.embedJpg(imgData);
+
+          const originalViewport = page.getViewport({ scale: 1.0, rotation: currentRotation });
+          const { width, height } = originalViewport;
+
+          const newPage = newPdfDoc.addPage([width, height]);
+
+          newPage.drawImage(jpgImage, {
+            x: 0,
+            y: 0,
+            width: width,
+            height: height,
+          });
+
+          const wrapper = document.querySelector(`.page-wrapper[data-page-number="${i}"]`);
+          
+          if (wrapper) {
+            const displayWidth = parseFloat(wrapper.style.width);
+            const ratio = width / displayWidth; 
+
+            wrapper.querySelectorAll('.white-out').forEach(el => {
+              const x = parseFloat(el.style.left) * ratio;
+              const elW = parseFloat(el.style.width) * ratio;
+              const elH = parseFloat(el.style.height) * ratio;
+              const yFromTop = parseFloat(el.style.top) * ratio;
+              const pdfY = height - yFromTop - elH;
+
+              newPage.drawRectangle({
+                x: x, y: pdfY, width: elW, height: elH,
+                color: rgb(1, 1, 1),
+              });
+            });
+
+            wrapper.querySelectorAll('.text-input').forEach(el => {
+              const text = el.innerText;
+              if(!text) return;
+              
+              const cssFontSize = parseFloat(window.getComputedStyle(el).fontSize);
+              const pdfFontSize = cssFontSize * ratio;
+              
+              const x = parseFloat(el.style.left) * ratio;
+              const yFromTop = parseFloat(el.style.top) * ratio;
+              const pdfY = height - yFromTop - (pdfFontSize * 0.85);
+
+              newPage.drawText(text, {
+                x: x, y: pdfY, size: pdfFontSize, font: customFont, color: rgb(0, 0, 0),
+              });
+            });
+          }
+        }
+
+        const pdfBytes = await newPdfDoc.save();
+        const newName = originalFile.name.replace('.pdf', '') + '_edited.pdf';
+        
+        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = newName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+      } catch (e) {
+        console.error(e);
+        alert("保存時エラー: " + e.message);
+      } finally {
+        showLoading(false);
+      }
+    }
+  </script>
+</body>
+</html>
