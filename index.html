@@ -529,7 +529,7 @@
               const yFromTop = (parseFloat(el.style.top) + offset) * ratio;
               
               // PDFのY座標計算（0.85 -> 0.87 へ微調整してベースラインを合わせる）
-              const pdfY = height - yFromTop - (pdfFontSize * 0.93);
+              const pdfY = height - yFromTop - (pdfFontSize * 0.95);
 
               newPage.drawText(text, {
                 x: xFromLeft, 
